@@ -8,9 +8,7 @@ from sklearn.neighbors import NearestNeighbors
 import streamlit as st
 
 
-# -----------------------------
 # Descarga y carga del dataset
-# -----------------------------
 @st.cache_data
 def load_dataset():
     url = "https://drive.google.com/uc?id=1FUbHoTFumMXM3kH2jfI9D-Mxao8Gl_O9"
@@ -115,9 +113,7 @@ class SoupCreator(BaseEstimator, TransformerMixin):
         return X_copy
 
 
-# -----------------------------
 # Entrenamiento del modelo
-# -----------------------------
 @st.cache_resource
 def train_model():
     df = load_dataset()
@@ -153,34 +149,47 @@ def train_model():
     return df, X, tfidf, tfidf_matrix, nn
 
 
-# -----------------------------
-# Función pública de recomendación
-# -----------------------------
-def recomendar_peliculas(idx_pelicula, n=10):
+def recomendar_peliculas_multiples(idx_peliculas, n=10):
+    """
+    Genera recomendaciones basadas en múltiples películas seleccionadas (por índice en el DataFrame).
+    Combina los vectores TF-IDF promedio de las películas elegidas y busca las más similares.
+    """
     df, X, tfidf, tfidf_matrix, nn = train_model()
 
-    distances, indices_vecinos = nn.kneighbors(tfidf_matrix[idx_pelicula], n_neighbors=n + 1)
+    if isinstance(idx_peliculas, int):
+        idx_peliculas = [idx_peliculas]
+
+    idx_peliculas_validas = [idx for idx in idx_peliculas if 0 <= idx < len(df)]
+    if not idx_peliculas_validas:
+        print("❌ No se encontraron índices válidos.")
+        return pd.DataFrame()
+
+    vectores = tfidf_matrix[idx_peliculas_validas]
+
+    # Combina los vectores de las películas base
+    vector_combinado = vectores.mean(axis=0)
+    vector_combinado = np.asarray(vector_combinado)
+    if vector_combinado.ndim == 1:
+        vector_combinado = vector_combinado.reshape(1, -1)
+
+    distances, indices_vecinos = nn.kneighbors(vector_combinado, n_neighbors=n + len(idx_peliculas_validas))
 
     similitudes = 1 - distances.flatten()
-    movie_indices = indices_vecinos.flatten()[1:]
-    similitudes = similitudes[1:]
+    movie_indices = indices_vecinos.flatten()
 
-    df_recomendadas = (
-        df.iloc[movie_indices][
-            [
-                "title",
-                "genres",
-                "directors",
-                "main_actors",
-                "popularity",
-                "keywords",
-                "overview",
-                "release_date",
-            ]
-        ]
-        .copy()
-    )
-    df_recomendadas["similitud"] = similitudes
-    return df_recomendadas.sort_values(by="similitud", ascending=False).reset_index(
-        drop=True
-    )
+    # Evitar recomendar las mismas películas base
+    mask_no_repetidas = ~np.isin(movie_indices, idx_peliculas_validas)
+    movie_indices = movie_indices[mask_no_repetidas]
+    similitudes = similitudes[mask_no_repetidas]
+
+    df_recomendadas = df.iloc[movie_indices][[
+        'title', 'genres', 'directors', 'main_actors',
+        'popularity', 'keywords', 'overview', 'release_date'
+    ]].copy()
+    df_recomendadas['similitud'] = similitudes
+
+    df_recomendadas = df_recomendadas.sort_values(by='similitud', ascending=False).reset_index(drop=True)
+
+    base_titles = df.loc[idx_peliculas_validas, 'title'].tolist()
+    print(f"🎬 Basado en: {', '.join(base_titles)}")
+    return df_recomendadas.head(n)
