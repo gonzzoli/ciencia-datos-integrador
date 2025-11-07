@@ -1,5 +1,7 @@
 import streamlit as st
 from modelo import load_dataset, recomendar_peliculas_multiples, train_model
+from grafico import generar_df_comparacion, obtener_perfil_contenido
+import altair as alt
 
 st.set_page_config(layout="wide", page_title="Recomendador de Películas")
 
@@ -38,7 +40,7 @@ if titulo:
     else:
         if len(coincidencias) > 1:
             opciones = [
-                f"{row['title']} - {row['directors']}"
+                f"{row['title']} ({row["release_date"]}) - {row['directors']}"
                 for _, row in coincidencias.iterrows()
             ]
             seleccion = st.selectbox(
@@ -113,20 +115,73 @@ if st.session_state.peliculas_idx:
         columnas_mostradas = ["title", "release_date", "original_language", "budget", "revenue", "runtime", "vote_average", "vote_count", "genres", "similitud_promedio"]
         st.dataframe(st.session_state.recomendadas[columnas_mostradas])
 
-        # --- selector para mostrar poster y graficos ---
-        seleccion_titulo = st.selectbox(
+        # --- selector usando el índice como value ---
+        opciones = [(f"{row['title']} ({row['release_date']}) - {row["directors"]}", idx) 
+                    for idx, row in st.session_state.recomendadas.iterrows()]
+
+        seleccion_idx = st.selectbox(
             "Seleccioná una película para ver su póster:",
-            st.session_state.recomendadas["title"].tolist()
+            options=[idx for _, idx in opciones],
+            format_func=lambda x: [label for label, idx in opciones if idx == x][0]
         )
 
-        if seleccion_titulo:
-            fila = st.session_state.recomendadas[st.session_state.recomendadas["title"] == seleccion_titulo].iloc[0]
+        if seleccion_idx is not None:
+            fila = st.session_state.recomendadas.loc[seleccion_idx]
             poster_url = fila.get("poster_path", "")
+            titulo = fila["title"]
 
-            st.markdown(f"### {seleccion_titulo}")
+            st.markdown(f"### {titulo}")
             if isinstance(poster_url, str) and poster_url.strip() != "":
                 st.image(f"https://image.tmdb.org/t/p/w300{poster_url}", width=250)
             else:
                 st.write("(Sin póster disponible)")
+        
+        # --- GRÁFICO INTERACTIVO ALTAR ---
+        st.subheader("Comparación de Features TF-IDF")
+
+        df_full_comparison = generar_df_comparacion(
+            st.session_state.peliculas_idx,
+            n_recomendaciones=n_recomendadas, n_features=15
+        )
+
+        # Selector de base
+        bases = df_full_comparison['base_index'].unique()
+        seleccion_base = st.selectbox(
+            "Seleccioná la película base para comparar:",
+            options=bases,
+            format_func=lambda x: df.loc[x, 'title']
+        )
+
+        df_filtrado = df_full_comparison[df_full_comparison['base_index'] == seleccion_base]
+        pelicula_base = df_filtrado['comparison_group'].unique()[0]
+
+                # Selector de recomendada usando Altair 4.x
+        selection_recom = alt.selection_single(
+            fields=['comparison_group'],
+            bind=alt.binding_select(
+                options=[p for p in df_filtrado['comparison_group'].unique() if p != pelicula_base],
+                name="Comparar con: "
+            ),
+            init={'comparison_group': df_filtrado['comparison_group'].unique()[1]}
+        )
+
+        chart = (
+            alt.Chart(df_filtrado)
+            .mark_bar()
+            .encode(
+                x='peso_tfidf',
+                y=alt.Y('feature', sort=df_filtrado.groupby('feature')['peso_tfidf'].sum().sort_values(ascending=False).index.tolist()),
+                color='comparison_group',
+                tooltip=['feature', 'peso_tfidf', 'comparison_group']
+            )
+            # Filtrar para que siempre aparezca la base + la seleccionada
+            .transform_filter(
+                (alt.datum.comparison_group == pelicula_base) | selection_recom
+            )
+            .add_selection(selection_recom)
+            .properties(title='Comparación Interactiva de Features entre Películas')
+        )
+
+        st.altair_chart(chart, use_container_width=True)
 else:
     st.info("Agregá al menos una película para comenzar.")

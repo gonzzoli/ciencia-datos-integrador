@@ -8,3 +8,4 @@ scikit-learn
 python-multipart
 gdown
 standard-imghdr
+altair
